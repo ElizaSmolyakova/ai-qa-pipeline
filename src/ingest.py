@@ -1,58 +1,56 @@
+import re
 from pathlib import Path
 import chromadb
-from chromadb.utils import embedding_functions
 
-DB_PATH = "./chroma_db"
 COLLECTION_NAME = "project_specs"
-
-ru_ef = embedding_functions.SentenceTransformerEmbeddingFunction(
-    model_name="paraphrase-multilingual-MiniLM-L12-v2"
-)
+chroma_client = chromadb.PersistentClient(path="./chroma_db")
 
 
-def get_client():
-    return chromadb.PersistentClient(path=DB_PATH)
+def get_next_req_id(collection) -> str:
+    """Автоматически генерирует следующий свободный REQ-XXX на основе записей в базе."""
+    existing = collection.get(include=["metadatas"])
+    max_num = 0
+    for meta in existing["metadatas"]:
+        match = re.match(r"REQ-(\d+)", meta.get("req_id", ""))
+        if match:
+            max_num = max(max_num, int(match.group(1)))
+    return f"REQ-{max_num + 1:03d}"
 
 
-def get_collection():
-    client = get_client()
-    return client.get_or_create_collection(
-        name=COLLECTION_NAME,
-        embedding_function=ru_ef,
-    )
-
-
-def ingest_specs(specs_dir: str = "specs") -> int:
-    client = get_client()
-    # Безопасно пересоздаем коллекцию средствами самой ChromaDB (без удаления папки на диске!)
+def ingest_requirements(specs_dir: str = "specs") -> int:
     try:
-        client.delete_collection(name=COLLECTION_NAME)
+        chroma_client.delete_collection(COLLECTION_NAME)
     except Exception:
         pass
 
-    collection = get_collection()
-    specs_path = Path(specs_dir)
+    collection = chroma_client.get_or_create_collection(name=COLLECTION_NAME)
+    pattern = re.compile(r"-\s*\[REQ\]\s*\[([a-zA-Z0-9_-]+)\]\s*(.+)")
 
-    documents = []
-    metadatas = []
-    ids = []
+    created_ids = []
+    for md_file in sorted(Path(specs_dir).glob("*.md")):
+        for line in md_file.read_text(encoding="utf-8").splitlines():
+            match = pattern.match(line.strip())
+            if match:
+                domain, text = match.groups()
+                req_id = get_next_req_id(collection)
+                doc_id = f"{req_id}_v1"
+                collection.add(
+                    ids=[doc_id],
+                    documents=[f"[{req_id}] [{domain}] {text}"],
+                    metadatas=[{
+                        "req_id": req_id,
+                        "domain": domain,
+                        "version": 1,
+                        "status": "active",
+                        "overrides": "",
+                        "overridden_by": "",
+                    }],
+                )
+                created_ids.append(doc_id)
 
-    for file_path in specs_path.glob("*.md"):
-        content = file_path.read_text(encoding="utf-8")
-        documents.append(content)
-        metadatas.append({"source": file_path.name})
-        ids.append(file_path.stem)
-
-    if documents:
-        collection.upsert(
-            documents=documents,
-            metadatas=metadatas,
-            ids=ids,
-        )
-
-    return len(documents)
+    print(f"✅ Загружено активных требований с авто-ID: {len(created_ids)} шт. ({created_ids})")
+    return len(created_ids)
 
 
 if __name__ == "__main__":
-    count = ingest_specs()
-    print(f"✅ Успешно загружено спецификаций в векторную базу: {count}")
+    ingest_requirements()
