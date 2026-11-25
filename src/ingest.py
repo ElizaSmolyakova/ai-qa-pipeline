@@ -19,7 +19,7 @@ def get_next_req_id(collection) -> str:
 
 
 def ingest_requirements(dirs: tuple[str, ...] = ("specs", "incoming_reqs")) -> int:
-    """Дозагружает требования из папок с авто-ID, SHA-256 дедупликацией и сохранением source."""
+    """Дозагружает новые требования без перезаписи истории и без дубликатов."""
     collection = chroma_client.get_or_create_collection(name=COLLECTION_NAME)
     existing = collection.get(include=["metadatas"])
     existing_hashes = {meta.get("text_hash") for meta in existing["metadatas"] if meta.get("text_hash")}
@@ -64,7 +64,6 @@ def ingest_requirements(dirs: tuple[str, ...] = ("specs", "incoming_reqs")) -> i
                 existing_hashes.add(text_hash)
                 added_ids.append(doc_id)
 
-            # Fallback для файлов без тегов [REQ] (например, specs/auth.md)
             if not matched_lines and raw_text.strip():
                 text_hash = hashlib.sha256(raw_text.strip().encode("utf-8")).hexdigest()[:16]
                 if text_hash not in existing_hashes:
@@ -93,12 +92,10 @@ def ingest_requirements(dirs: tuple[str, ...] = ("specs", "incoming_reqs")) -> i
 
 
 def get_collection():
-    """Совместимость для evals/test_retrieval.py"""
     return chroma_client.get_or_create_collection(name=COLLECTION_NAME)
 
 
 def ingest_specs(specs_dir: str = "specs") -> int:
-    """Совместимость для evals/test_retrieval.py"""
     return ingest_requirements(dirs=(specs_dir,))
 
 
