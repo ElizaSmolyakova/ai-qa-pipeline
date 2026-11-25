@@ -115,5 +115,10 @@ def generate_pytest_with_healing(
 
 if __name__ == "__main__":
     tracer.clear()
-    suite = generate_test_suite("Составь позитивные и негативные тесты для сервиса оплаты")
+    scenarios_file = Path("generated_scenarios/payment_suite.json")
+    if scenarios_file.exists():
+        print(f"📄 Читаю одобренные сценарии из {scenarios_file}...")
+        suite = TestSuite.model_validate_json(scenarios_file.read_text(encoding="utf-8"))
+    else:
+        suite = generate_test_suite("Составь позитивные и негативные тесты для сервиса оплаты")
     generate_pytest_with_healing(suite)

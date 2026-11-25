@@ -1,0 +1,53 @@
+{
+  "cases": [
+    {
+      "title": "Позитивный сценарий: Оплата заказа свыше 5000 рублей",
+      "is_negative": false,
+      "http_method": "POST",
+      "endpoint": "/api/v1/pay",
+      "expected_status": 202
+    },
+    {
+      "title": "Позитивный сценарий: Оплата заказа менее 5000 рублей",
+      "is_negative": false,
+      "http_method": "POST",
+      "endpoint": "/api/v1/pay",
+      "expected_status": 200
+    },
+    {
+      "title": "Негативный сценарий: Оплата заказа с отрицательной суммой",
+      "is_negative": true,
+      "http_method": "POST",
+      "endpoint": "/api/v1/pay",
+      "expected_status": 400
+    },
+    {
+      "title": "Негативный сценарий: Оплата заказа с нулевой суммой",
+      "is_negative": true,
+      "http_method": "POST",
+      "endpoint": "/api/v1/pay",
+      "expected_status": 400
+    },
+    {
+      "title": "Негативный сценарий: Оплата заказа с неподдерживаемой валютой",
+      "is_negative": true,
+      "http_method": "POST",
+      "endpoint": "/api/v1/pay",
+      "expected_status": 422
+    },
+    {
+      "title": "Негативный сценарий: Оплата заказа с пустым телом запроса",
+      "is_negative": true,
+      "http_method": "POST",
+      "endpoint": "/api/v1/pay",
+      "expected_status": 400
+    },
+    {
+      "title": "Негативный сценарий: Оплата заказа с невалидным JSON-телом",
+      "is_negative": true,
+      "http_method": "POST",
+      "endpoint": "/api/v1/pay",
+      "expected_status": 400
+    }
+  ]
+}

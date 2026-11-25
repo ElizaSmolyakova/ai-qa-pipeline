@@ -14,3 +14,8 @@ class TestSuite(BaseModel):
 
 class GeneratedCode(BaseModel):
     python_code: str
+
+class JudgeVerdict(BaseModel):
+    score: int
+    passed: bool
+    critique: str
