@@ -1,0 +1,55 @@
+name: AI QA Pipeline CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  fast-evals:
+    name: 1. RAG Retrieval & Fast Evals
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Ingest specs into ChromaDB
+        run: python -m src.ingest
+
+      - name: Run fast deterministic evals
+        run: pytest -m "not llm" -v
+
+  container-tests:
+    name: 2. Run Generated Tests in Testcontainers
+    runs-on: ubuntu-latest
+    needs: fast-evals
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build FastAPI mock Docker image
+        run: docker build -t payment-mock-api:latest .
+
+      - name: Run pytest against Testcontainers
+        run: pytest generated_tests/ -v
