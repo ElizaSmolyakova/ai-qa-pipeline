@@ -19,7 +19,7 @@ def get_next_req_id(collection) -> str:
 
 
 def ingest_requirements(dirs: tuple[str, ...] = ("specs", "incoming_reqs")) -> int:
-    """Дозагружает новые требования из папок без удаления истории и без дубликатов."""
+    """Дозагружает требования из папок с авто-ID, SHA-256 дедупликацией и сохранением source."""
     collection = chroma_client.get_or_create_collection(name=COLLECTION_NAME)
     existing = collection.get(include=["metadatas"])
     existing_hashes = {meta.get("text_hash") for meta in existing["metadatas"] if meta.get("text_hash")}
@@ -32,14 +32,18 @@ def ingest_requirements(dirs: tuple[str, ...] = ("specs", "incoming_reqs")) -> i
         if not folder_path.exists():
             continue
         for md_file in sorted(folder_path.glob("*.md")):
-            for line in md_file.read_text(encoding="utf-8").splitlines():
+            raw_text = md_file.read_text(encoding="utf-8")
+            matched_lines = False
+
+            for line in raw_text.splitlines():
                 match = pattern.match(line.strip())
                 if not match:
                     continue
+                matched_lines = True
                 domain, text = match.groups()
                 text_hash = hashlib.sha256(text.strip().encode("utf-8")).hexdigest()[:16]
                 if text_hash in existing_hashes:
-                    continue  # Уже есть в базе — не плодим дубли и не сдвигаем ID!
+                    continue
 
                 req_id = get_next_req_id(collection)
                 doc_id = f"{req_id}_v1"
@@ -49,6 +53,7 @@ def ingest_requirements(dirs: tuple[str, ...] = ("specs", "incoming_reqs")) -> i
                     metadatas=[{
                         "req_id": req_id,
                         "domain": domain,
+                        "source": md_file.name,
                         "version": 1,
                         "status": "active",
                         "text_hash": text_hash,
@@ -59,30 +64,43 @@ def ingest_requirements(dirs: tuple[str, ...] = ("specs", "incoming_reqs")) -> i
                 existing_hashes.add(text_hash)
                 added_ids.append(doc_id)
 
+            # Fallback для файлов без тегов [REQ] (например, specs/auth.md)
+            if not matched_lines and raw_text.strip():
+                text_hash = hashlib.sha256(raw_text.strip().encode("utf-8")).hexdigest()[:16]
+                if text_hash not in existing_hashes:
+                    req_id = get_next_req_id(collection)
+                    doc_id = f"{req_id}_v1"
+                    collection.add(
+                        ids=[doc_id],
+                        documents=[raw_text.strip()],
+                        metadatas=[{
+                            "req_id": req_id,
+                            "domain": md_file.stem,
+                            "source": md_file.name,
+                            "version": 1,
+                            "status": "active",
+                            "text_hash": text_hash,
+                            "overrides": "",
+                            "overridden_by": "",
+                        }],
+                    )
+                    existing_hashes.add(text_hash)
+                    added_ids.append(doc_id)
+
     total = collection.count()
     print(f"✅ Новых требований добавлено: {len(added_ids)} ({added_ids}). Всего в базе: {total} шт.")
     return len(added_ids)
 
 
+def get_collection():
+    """Совместимость для evals/test_retrieval.py"""
+    return chroma_client.get_or_create_collection(name=COLLECTION_NAME)
+
+
+def ingest_specs(specs_dir: str = "specs") -> int:
+    """Совместимость для evals/test_retrieval.py"""
+    return ingest_requirements(dirs=(specs_dir,))
+
+
 if __name__ == "__main__":
     ingest_requirements()
-
-
-def get_collection():
-    """Совместимость для evals/test_retrieval.py"""
-    return chroma_client.get_or_create_collection(name=COLLECTION_NAME)
-
-
-def ingest_specs(specs_dir: str = "specs") -> int:
-    """Совместимость для evals/test_retrieval.py"""
-    return ingest_requirements(dirs=(specs_dir,))
-
-
-def get_collection():
-    """Совместимость для evals/test_retrieval.py"""
-    return chroma_client.get_or_create_collection(name=COLLECTION_NAME)
-
-
-def ingest_specs(specs_dir: str = "specs") -> int:
-    """Совместимость для evals/test_retrieval.py"""
-    return ingest_requirements(dirs=(specs_dir,))
