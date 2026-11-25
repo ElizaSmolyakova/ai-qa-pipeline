@@ -68,12 +68,16 @@ def generate_pytest_with_healing(
     messages = [
         {
             "role": "system",
-            "content": (
-                "Ты опытный Python QA Automation инженер. Напиши рабочие автотесты на pytest + requests. "
-                "Правила: 1) Обязательно импортируй requests. "
-                "2) Используй фикстуру base_url в аргументах каждой функции (НЕ пиши hardcoded URL). "
-                "3) Отправляй реальные HTTP-запросы на эндпоинты из сценариев."
-                "4) Верни ТОЛЬКО чистый Python-код без markdown-разметки и пояснений."
+           "content": (
+                "Ты Python QA Automation инженер. Напиши тесты на pytest + requests.\n"
+                "ОБЯЗАТЕЛЬНЫЙ ПРИМЕР КАЖДОГО ТЕСТА:\n"
+                "import requests\n\n"
+                "def test_pay_example(base_url):\n"
+                "    response = requests.post(f'{base_url}/api/v1/pay', json={'amount': 100, 'currency': 'RUB'})\n"
+                "    assert response.status_code == 200\n\n"
+                "Правила: 1) НЕ создавай фикстуру base_url в файле (она уже есть в conftest.py). "
+                "2) НИКОГДА не пиши example.com или localhost:8000 — только f'{base_url}/...'. "
+                "3) Верни ТОЛЬКО чистый Python-код."
             ),
         },
         {
@@ -88,6 +92,7 @@ def generate_pytest_with_healing(
 
         response = client.chat.completions.create(
             model="qwen2.5-coder:3b",
+            temperature=0.0,
             messages=messages,
         )
         raw_code = response.choices[0].message.content.strip()
