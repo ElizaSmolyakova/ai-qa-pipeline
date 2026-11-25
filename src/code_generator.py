@@ -1,106 +1,126 @@
 import ast
+import re
+import subprocess
+import time
 from pathlib import Path
-from pydantic import BaseModel, Field
-from src.generator import MODEL_NAME, client, generate_test_suite
-from src.schemas import TestSuite
-import time 
+from openai import OpenAI
+from src.generator import generate_test_suite
+from src.schemas import GeneratedCode, TestSuite
 from src.telemetry.tracer import tracer
 
-
-class GeneratedTestFile(BaseModel):
-    filename: str = Field(description="Имя файла на английском, например test_payment_generated.py")
-    python_code: str = Field(description="Чистый валидный код автотестов на pytest без markdown-оберток")
+client = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
 
 
-def generate_pytest_from_suite(suite: TestSuite, output_dir: str = "generated_tests") -> Path:
-    # Явно передаём HTTP-метод и путь из каждого проверенного сценария
-    scenarios_text = "\n".join(
-        f"{i}. {c.title} | HTTP-метод: {c.http_method.upper()} | Путь: {c.endpoint} "
-        f"| Негативный: {c.is_negative} | Ожидаемый код: {c.expected_status}"
-        for i, c in enumerate(suite.cases, 1)
-    )
-
-    t2 = time.time()
-    response = client.beta.chat.completions.parse(
-        model=MODEL_NAME,
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "Ты Senior SDET (QA Automation). Напиши автотесты на pytest строго по переданному списку "
-                    "тест-сценариев (один тест-кейс = одна функция def test_...). "
-                    "Используй тот HTTP-метод (requests.get, requests.post, requests.put, requests.delete), "
-                    "который указан в поле 'HTTP-метод' каждого сценария. "
-                    "Базовый URL сервера: http://localhost:8000 (например: http://localhost:8000/api/v1/pay). "
-                    "В поле python_code пиши ТОЛЬКО чистый код Python, без ```python."
-                ),
-            },
-            {
-                "role": "user",
-                "content": f"Автоматизируй следующие проверенные тест-сценарии:\n{scenarios_text}",
-            },
-        ],
-        response_format=GeneratedTestFile,
-    )
-    # Превращаем проверенные тест-кейсы в аккуратный список для промпта
-    scenarios_text = "\n".join(
-        f"{i}. {c.title} | Метод и URL: {c.endpoint} | Негативный: {c.is_negative} | Ожидаемый код: {c.expected_status}"
-        for i, c in enumerate(suite.cases, 1)
-    )
-
-    response = client.beta.chat.completions.parse(
-        model=MODEL_NAME,
-        messages=[
-            {
-                "role": "system",
-               "content": (
-                    "Ты Senior SDET (QA Automation). Напиши автотесты на pytest строго по переданному списку "
-                    "тест-сценариев (один тест-кейс = одна функция def test_...(base_url):). "
-                    "Каждый тест ОБЯЗАН принимать параметр base_url и формировать адрес как f'{base_url}{endpoint}'. "
-                    "Никогда не пиши example.com или hardcoded домены! "
-                    "Используй тот HTTP-метод (requests.get, requests.post, requests.put, requests.delete), "
-                    "который указан в поле 'HTTP-метод' каждого сценария. "
-                    "В поле python_code пиши ТОЛЬКО чистый код Python, без ```python."
-                ),
-            },
-            {
-                "role": "user",
-                "content": f"Автоматизируй следующие проверенные тест-сценарии:\n{scenarios_text}",
-            },
-        ],
-        response_format=GeneratedTestFile,
-    )
-
-    generated = response.choices[0].message.parsed
-
-    out_path = Path(output_dir)
-    out_path.mkdir(exist_ok=True)
-    filename = generated.filename
-    if not filename.startswith("test_"):
-        filename = f"test_{filename}"
-
-    file_path = out_path / filename
-    file_path.write_text(generated.python_code, encoding="utf-8")
-    
-    tracer.log("code_generation", "ollama_llm", {"filename": file_path.name}, t2)
-    return file_path
-
-
-def validate_python_syntax(file_path: Path) -> bool:
+def run_pytest_gate(file_path: Path, suite: TestSuite) -> tuple[bool, str]:
+    """Quality Gate 2: 5 жёстких проверок (синтаксис, античитинг, сверка кодов, Testcontainers)."""
     code = file_path.read_text(encoding="utf-8")
-    ast.parse(code)
-    return True
+
+    # Замок 1: Валидный синтаксис Python
+    try:
+        tree = ast.parse(code)
+    except SyntaxError as e:
+     return False, f"SyntaxError: {e}\nНачало файла: {code[:120]!r}"
+
+    # Замок 2: Запрет хардкода URL
+    if "example.com" in code or "localhost:8000" in code:
+        return False, "Нарушение: найден хардкод URL (example.com или localhost:8000). Используй только фикстуру base_url!"
+
+    # Замок 3: Сохранение количества тестов и запрет на пустышки
+    test_funcs = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")
+    ]
+    if len(test_funcs) < len(suite.cases):
+        return False, f"Жульничество: сценариев было {len(suite.cases)}, а тестов в коде только {len(test_funcs)}. Не удаляй тесты!"
+
+    for func in test_funcs:
+        func_src = ast.get_source_segment(code, func) or ""
+        if "requests." not in func_src:
+            return False, f"В тесте {func.name} нет реального HTTP-запроса через requests!"
+        has_assert = any(isinstance(n, ast.Assert) for n in ast.walk(func))
+        if not has_assert or "assert True" in func_src:
+            return False, f"В тесте {func.name} отсутствует осмысленный assert!"
+
+    # Замок 4: Все ожидаемые статус-коды из сценариев обязаны остаться в коде
+    expected_codes = {str(case.expected_status) for case in suite.cases}
+    missing_codes = [c for c in expected_codes if c not in code]
+    if missing_codes:
+        return False, f"Из кода пропали ожидаемые статус-коды из сценариев: {missing_codes}. Верни их в assert!"
+
+    # Замок 5: Живой прогон против Testcontainers (Docker)
+    result = subprocess.run(
+        ["pytest", str(file_path), "-v", "--tb=short"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        return True, "OK"
+    return False, result.stdout[-1500:]
+
+
+def generate_pytest_with_healing(
+    suite: TestSuite, output_dir: str = "generated_tests", max_retries: int = 3
+) -> Path:
+    out_path = Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+    file_path = out_path / "test_pay.py"
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Ты опытный Python QA Automation инженер. Напиши рабочие автотесты на pytest + requests. "
+                "Правила: 1) Обязательно импортируй requests. "
+                "2) Используй фикстуру base_url в аргументах каждой функции (НЕ пиши hardcoded URL). "
+                "3) Отправляй реальные HTTP-запросы на эндпоинты из сценариев."
+                "4) Верни ТОЛЬКО чистый Python-код без markdown-разметки и пояснений."
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"Сгенерируй файл test_pay.py по этим сценариям:\n{suite.model_dump_json(indent=2)}",
+        },
+    ]
+
+    for attempt in range(1, max_retries + 1):
+        print(f"\n🔄 [Контур 2] Попытка генерации кода #{attempt} из {max_retries}...")
+        t_start = time.time()
+
+        response = client.chat.completions.create(
+            model="qwen2.5-coder:3b",
+            messages=messages,
+        )
+        raw_code = response.choices[0].message.content.strip()
+        match = re.search(r"```(?:python)?\n(.*?)```", raw_code, re.DOTALL)
+        if match:
+            raw_code = match.group(1).strip()
+        file_path.write_text(raw_code, encoding="utf-8")
+
+        passed, feedback = run_pytest_gate(file_path, suite)
+        tracer.log(
+            f"code_generation_attempt_{attempt}",
+            "ollama_llm",
+            {"passed": passed, "filename": file_path.name},
+            t_start,
+        )
+
+        if passed:
+            print(f"✅ [Контур 2] Успех! Все 5 замков и Testcontainers пройдены с попытки #{attempt}!")
+            return file_path
+
+        print(f"❌ Попытка #{attempt} не прошла проверку:\n{feedback}\nПередаю ошибку на самоисправление...")
+        messages.append({"role": "assistant", "content": raw_code})
+        messages.append(
+            {
+                "role": "user",
+                "content": f"Код не прошёл проверку. Исправь ошибки по этому логу и верни полный исправленный файл:\n{feedback}",
+            }
+        )
+
+    raise RuntimeError(f"Агент не смог добиться зелёных тестов за {max_retries} попытки.")
 
 
 if __name__ == "__main__":
     tracer.clear()
-    # Шаг 1: Генерируем структурированные тест-кейсы из требований
     suite = generate_test_suite("Составь позитивные и негативные тесты для сервиса оплаты")
-    print(f"📋 Сгенерировано сценариев: {len(suite.cases)}")
-
-    # Шаг 2: Автоматизируем ИМЕННО ЭТИ сценарии в код pytest
-    saved_file = generate_pytest_from_suite(suite)
-    is_valid = validate_python_syntax(saved_file)
-
-    print(f"✅ Автотесты сохранены в: {saved_file}")
-    print(f"🔍 Проверка синтаксиса Python (AST): {'OK' if is_valid else 'FAIL'}")
+    generate_pytest_with_healing(suite)

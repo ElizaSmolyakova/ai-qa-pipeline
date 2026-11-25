@@ -11,3 +11,6 @@ class TestCase(BaseModel):
 
 class TestSuite(BaseModel):
     cases: list[TestCase]
+
+class GeneratedCode(BaseModel):
+    python_code: str
