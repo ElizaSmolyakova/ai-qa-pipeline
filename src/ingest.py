@@ -66,3 +66,13 @@ def ingest_requirements(dirs: tuple[str, ...] = ("specs", "incoming_reqs")) -> i
 
 if __name__ == "__main__":
     ingest_requirements()
+
+
+def get_collection():
+    """Совместимость для evals/test_retrieval.py"""
+    return chroma_client.get_or_create_collection(name=COLLECTION_NAME)
+
+
+def ingest_specs(specs_dir: str = "specs") -> int:
+    """Совместимость для evals/test_retrieval.py"""
+    return ingest_requirements(dirs=(specs_dir,))
