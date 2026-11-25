@@ -1,3 +1,4 @@
+import hashlib
 import re
 from pathlib import Path
 import chromadb
@@ -7,7 +8,7 @@ chroma_client = chromadb.PersistentClient(path="./chroma_db")
 
 
 def get_next_req_id(collection) -> str:
-    """Автоматически генерирует следующий свободный REQ-XXX на основе записей в базе."""
+    """Автоматически генерирует следующий свободный REQ-XXX на основе всех записей в базе."""
     existing = collection.get(include=["metadatas"])
     max_num = 0
     for meta in existing["metadatas"]:
@@ -17,21 +18,29 @@ def get_next_req_id(collection) -> str:
     return f"REQ-{max_num + 1:03d}"
 
 
-def ingest_requirements(specs_dir: str = "specs") -> int:
-    try:
-        chroma_client.delete_collection(COLLECTION_NAME)
-    except Exception:
-        pass
-
+def ingest_requirements(dirs: tuple[str, ...] = ("specs", "incoming_reqs")) -> int:
+    """Дозагружает новые требования из папок без удаления истории и без дубликатов."""
     collection = chroma_client.get_or_create_collection(name=COLLECTION_NAME)
-    pattern = re.compile(r"-\s*\[REQ\]\s*\[([a-zA-Z0-9_-]+)\]\s*(.+)")
+    existing = collection.get(include=["metadatas"])
+    existing_hashes = {meta.get("text_hash") for meta in existing["metadatas"] if meta.get("text_hash")}
 
-    created_ids = []
-    for md_file in sorted(Path(specs_dir).glob("*.md")):
-        for line in md_file.read_text(encoding="utf-8").splitlines():
-            match = pattern.match(line.strip())
-            if match:
+    pattern = re.compile(r"-\s*\[REQ\]\s*\[([a-zA-Z0-9_-]+)\]\s*(.+)")
+    added_ids = []
+
+    for folder in dirs:
+        folder_path = Path(folder)
+        if not folder_path.exists():
+            continue
+        for md_file in sorted(folder_path.glob("*.md")):
+            for line in md_file.read_text(encoding="utf-8").splitlines():
+                match = pattern.match(line.strip())
+                if not match:
+                    continue
                 domain, text = match.groups()
+                text_hash = hashlib.sha256(text.strip().encode("utf-8")).hexdigest()[:16]
+                if text_hash in existing_hashes:
+                    continue  # Уже есть в базе — не плодим дубли и не сдвигаем ID!
+
                 req_id = get_next_req_id(collection)
                 doc_id = f"{req_id}_v1"
                 collection.add(
@@ -42,14 +51,17 @@ def ingest_requirements(specs_dir: str = "specs") -> int:
                         "domain": domain,
                         "version": 1,
                         "status": "active",
+                        "text_hash": text_hash,
                         "overrides": "",
                         "overridden_by": "",
                     }],
                 )
-                created_ids.append(doc_id)
+                existing_hashes.add(text_hash)
+                added_ids.append(doc_id)
 
-    print(f"✅ Загружено активных требований с авто-ID: {len(created_ids)} шт. ({created_ids})")
-    return len(created_ids)
+    total = collection.count()
+    print(f"✅ Новых требований добавлено: {len(added_ids)} ({added_ids}). Всего в базе: {total} шт.")
+    return len(added_ids)
 
 
 if __name__ == "__main__":
