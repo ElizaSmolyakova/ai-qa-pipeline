@@ -1,5 +1,5 @@
 import ast
-import re
+import re, json
 import subprocess
 import time
 from pathlib import Path
@@ -65,17 +65,19 @@ def run_pytest_gate(file_path: Path, suite: TestSuite) -> tuple[str, str]:
 
 
 def generate_pytest_with_healing(
-    suite: TestSuite, output_dir: str = "generated_tests", max_retries: int = 3
+    suite: TestSuite, 
+    output_dir: str = "generated_tests", 
+    target_filename: str = "test_pay.py",
+    max_retries: int = 3
 ) -> Path:
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
-    file_path = out_path / "test_pay.py"
-
+    file_path = out_path / target_filename
     messages = [
         {"role": "system", "content": load_skill("pytest_codegen")},
         {
             "role": "user",
-            "content": f"Сгенерируй файл test_pay.py по этим сценариям:\n{suite.model_dump_json(indent=2)}",
+            "content": f"Сгенерируй файл {target_filename} по этим сценариям:\n{suite.model_dump_json(indent=2)}",
         },
     ]
 
@@ -126,13 +128,43 @@ def generate_pytest_with_healing(
 
     raise RuntimeError(f"Агент не смог добиться зелёных тестов за {max_retries} попытки.")
 
+def update_test_registry(suite: TestSuite, test_file: Path, registry_path: str = "test_registry.json") -> None:
+    """Регистрирует новые сгенерированные тесты в едином реестре трассируемости."""
+    reg_file = Path(registry_path)
+    registry = json.loads(reg_file.read_text(encoding="utf-8")) if reg_file.exists() else []
+    existing_tcs = {item["tc_id"] for item in registry}
+
+    for idx, case in enumerate(suite.cases, start=len(registry) + 1):
+        tc_id = getattr(case, "id", None) or getattr(case, "tc_id", None) or f"TC-{idx:03d}"
+        if case.action == "ADD" and tc_id not in existing_tcs:
+            registry.append({
+                "req_id": getattr(case, "req_id", "REQ-006"),
+                "tc_id": tc_id,
+                "test_file": str(test_file),
+                "test_func": f"test_{tc_id.lower().replace('-', '_')}",
+                "description": getattr(case, "title", None) or getattr(case, "description", str(case)),
+                "status": "active",
+            })
+
+    reg_file.write_text(json.dumps(registry, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"📒 Реестр {registry_path} обновлён (всего записей: {len(registry)}).")
+
 
 if __name__ == "__main__":
     tracer.clear()
-    scenarios_file = Path("generated_scenarios/payment_suite.json")
-    if scenarios_file.exists():
-        print(f"📄 Читаю одобренные сценарии из {scenarios_file}...")
-        suite = TestSuite.model_validate_json(scenarios_file.read_text(encoding="utf-8"))
+    delta_files = sorted(Path("generated_scenarios").glob("delta_req-*.json"))
+    if delta_files:
+        delta_path = delta_files[-1]
+        req_slug = delta_path.stem.replace("delta_", "").replace("-", "_")  # например: req_006
+        target_name = f"test_{req_slug}.py"
+        print(f"📄 Читаю дельта-сценарии из {delta_path} -> генерирую {target_name}...")
+        suite = TestSuite.model_validate_json(delta_path.read_text(encoding="utf-8"))
+        out_file = generate_pytest_with_healing(suite, target_filename=target_name)
+        update_test_registry(suite, out_file)
     else:
-        suite = generate_test_suite("Составь позитивные и негативные тесты для сервиса оплаты")
-    generate_pytest_with_healing(suite)
+        scenarios_file = Path("generated_scenarios/payment_suite.json")
+        suite = TestSuite.model_validate_json(scenarios_file.read_text(encoding="utf-8"))
+        generate_pytest_with_healing(suite)
+
+
+generate_pytest_from_suite = generate_pytest_with_healing
