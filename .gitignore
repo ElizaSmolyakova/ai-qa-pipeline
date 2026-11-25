@@ -1,0 +1,15 @@
+# Окружение и кэши Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Локальная векторная база (пересоздается через ingest.py)
+chroma_db/
+*.sqlite3
+
+# Временные локальные артефакты и секреты
+trace_log.json
+.DS_Store
+.env

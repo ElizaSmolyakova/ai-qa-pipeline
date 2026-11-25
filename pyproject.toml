@@ -1,0 +1,4 @@
+[tool.pytest.ini_options]
+testpaths = ["evals"]
+pythonpath = ["."]
+addopts = "-v -s"
