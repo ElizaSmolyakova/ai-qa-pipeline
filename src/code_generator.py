@@ -12,19 +12,19 @@ from src.skills_loader import load_skill
 client = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
 
 
-def run_pytest_gate(file_path: Path, suite: TestSuite) -> tuple[bool, str]:
-    """Quality Gate 2: 5 жёстких проверок (синтаксис, античитинг, сверка кодов, Testcontainers)."""
+def run_pytest_gate(file_path: Path, suite: TestSuite) -> tuple[str, str]:
+    """Quality Gate 2: разделяет ошибки агента (AGENT_ERROR) и баги сервиса (SERVICE_MISMATCH)."""
     code = file_path.read_text(encoding="utf-8")
 
     # Замок 1: Валидный синтаксис Python
     try:
         tree = ast.parse(code)
     except SyntaxError as e:
-     return False, f"SyntaxError: {e}\nНачало файла: {code[:120]!r}"
+        return "AGENT_ERROR", f"SyntaxError в сгенерированном коде: {e}"
 
     # Замок 2: Запрет хардкода URL
     if "example.com" in code or "localhost:8000" in code:
-        return False, "Нарушение: найден хардкод URL (example.com или localhost:8000). Используй только фикстуру base_url!"
+        return "AGENT_ERROR", "Нарушение: найден хардкод URL (example.com или localhost:8000). Используй только фикстуру base_url!"
 
     # Замок 3: Сохранение количества тестов и запрет на пустышки
     test_funcs = [
@@ -32,21 +32,21 @@ def run_pytest_gate(file_path: Path, suite: TestSuite) -> tuple[bool, str]:
         if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")
     ]
     if len(test_funcs) < len(suite.cases):
-        return False, f"Жульничество: сценариев было {len(suite.cases)}, а тестов в коде только {len(test_funcs)}. Не удаляй тесты!"
+        return "AGENT_ERROR", f"Жульничество: сценариев было {len(suite.cases)}, а тестов в коде только {len(test_funcs)}. Не удаляй тесты!"
 
     for func in test_funcs:
         func_src = ast.get_source_segment(code, func) or ""
         if "requests." not in func_src:
-            return False, f"В тесте {func.name} нет реального HTTP-запроса через requests!"
+            return "AGENT_ERROR", f"В тесте {func.name} нет реального HTTP-запроса через requests!"
         has_assert = any(isinstance(n, ast.Assert) for n in ast.walk(func))
         if not has_assert or "assert True" in func_src:
-            return False, f"В тесте {func.name} отсутствует осмысленный assert!"
+            return "AGENT_ERROR", f"В тесте {func.name} отсутствует осмысленный assert!"
 
     # Замок 4: Все ожидаемые статус-коды из сценариев обязаны остаться в коде
     expected_codes = {str(case.expected_status) for case in suite.cases}
     missing_codes = [c for c in expected_codes if c not in code]
     if missing_codes:
-        return False, f"Из кода пропали ожидаемые статус-коды из сценариев: {missing_codes}. Верни их в assert!"
+        return "AGENT_ERROR", f"Из кода пропали ожидаемые статус-коды из сценариев: {missing_codes}. Верни их в assert!"
 
     # Замок 5: Живой прогон против Testcontainers (Docker)
     result = subprocess.run(
@@ -55,8 +55,13 @@ def run_pytest_gate(file_path: Path, suite: TestSuite) -> tuple[bool, str]:
         text=True,
     )
     if result.returncode == 0:
-        return True, "OK"
-    return False, result.stdout[-1500:]
+        return "PASSED", "OK"
+
+    # Код теста валиден, но упал против живого контейнера -> это расхождение сервиса со спекой!
+    failed_lines = [line for line in result.stdout.splitlines() if line.startswith("FAILED ")]
+    summary = "\n".join(failed_lines) if failed_lines else result.stdout[-1000:]
+    return "SERVICE_MISMATCH", summary
+
 
 
 def generate_pytest_with_healing(
@@ -89,19 +94,28 @@ def generate_pytest_with_healing(
             raw_code = match.group(1).strip()
         file_path.write_text(raw_code, encoding="utf-8")
 
-        passed, feedback = run_pytest_gate(file_path, suite)
+        status, feedback = run_pytest_gate(file_path, suite)
         tracer.log(
             f"code_generation_attempt_{attempt}",
             "ollama_llm",
-            {"passed": passed, "filename": file_path.name},
+            {"status": status, "filename": file_path.name},
             t_start,
         )
 
-        if passed:
+        if status == "PASSED":
             print(f"✅ [Контур 2] Успех! Все 5 замков и Testcontainers пройдены с попытки #{attempt}!")
             return file_path
 
-        print(f"❌ Попытка #{attempt} не прошла проверку:\n{feedback}\nПередаю ошибку на самоисправление...")
+        if status == "SERVICE_MISMATCH":
+            print(
+                f"\n🚨 [РАСХОЖДЕНИЕ СЕРВИСА СО СПЕЦИФИКАЦИЕЙ] (Попытка #{attempt}):\n"
+                f"Код сгенерированных тестов валиден (все AST-замки пройдены), но живой сервис ответил не по спеке:\n"
+                f"{feedback}\n"
+                f"Останавливаю цикл ретраев: требуется проверка бэкенда или спецификации человеком."
+            )
+            return file_path
+
+        print(f"⚠️ [ОШИБКА АГЕНТА] Попытка #{attempt} не прошла AST-замки:\n{feedback}\nПередаю на самоисправление...")
         messages.append({"role": "assistant", "content": raw_code})
         messages.append(
             {
