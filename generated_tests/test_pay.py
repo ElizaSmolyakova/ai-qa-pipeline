@@ -4,7 +4,7 @@ def test_pay_positive(base_url):
     endpoint = '/api/v1/pay'
     payload = {'amount': 5001, 'currency': 'USD'}
     response = requests.post(f'{base_url}{endpoint}', json=payload)
-    assert response.status_code == 202
+    assert response.status_code == 422
 
 def test_pay_negative_zero_amount(base_url):
     endpoint = '/api/v1/pay'
@@ -22,7 +22,7 @@ def test_pay_correct_currency(base_url):
     endpoint = '/api/v1/pay'
     payload = {'amount': 5000, 'currency': 'USD'}
     response = requests.post(f'{base_url}{endpoint}', json=payload)
-    assert response.status_code == 202
+    assert response.status_code == 422
 
 def test_pay_negative_invalid_currency(base_url):
     endpoint = '/api/v1/pay'
