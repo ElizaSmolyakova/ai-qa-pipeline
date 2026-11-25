@@ -1,8 +1,9 @@
-import ast
+import ast, pytest
 from src.code_generator import generate_pytest_from_suite
 from src.generator import generate_test_suite
 
 
+@pytest.mark.llm
 def test_generated_code_matches_scenarios_and_has_asserts(tmp_path):
     # 1. Получаем проверенный набор сценариев
     suite = generate_test_suite("Составь позитивные и негативные тесты для сервиса оплаты")

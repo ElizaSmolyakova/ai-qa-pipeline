@@ -1,6 +1,7 @@
 from pathlib import Path
 from pydantic import BaseModel, Field
 from src.generator import MODEL_NAME, client, generate_test_suite
+import pytest
 
 
 # Контракт для ответа "Судьи" (LLM-as-a-Judge)
@@ -10,6 +11,7 @@ class JudgeVerdict(BaseModel):
     has_hallucinations: bool = Field(description="True, если модель выдумала факты, которых нет в требованиях")
 
 
+@pytest.mark.llm
 def test_generated_payment_cases_deterministic():
     """Уровень 1 и 2: Детерминированные проверки структуры, покрытия и отсутствия выдуманных URL"""
     suite = generate_test_suite("Составь позитивные и негативные тесты для сервиса оплаты")
@@ -32,6 +34,7 @@ def test_generated_payment_cases_deterministic():
     assert 400 in statuses, f"Не покрыт негативный кейс со статусом 400! Получены статусы: {statuses}"
 
 
+@pytest.mark.llm
 def test_generated_cases_llm_as_a_judge():
     """Уровень 3: Семантическая проверка через LLM-as-a-Judge (поиск галлюцинаций)"""
     spec_text = Path("specs/payment.md").read_text(encoding="utf-8")

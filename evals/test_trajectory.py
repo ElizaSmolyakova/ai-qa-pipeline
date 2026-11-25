@@ -1,7 +1,9 @@
 import json
+import pytest
 from pathlib import Path
 
 
+@pytest.mark.llm
 def test_last_pipeline_run_trajectory():
     trace_file = Path("trace_log.json")
     assert trace_file.exists(), "Файл trace_log.json не найден! Сначала запусти пайплайн: python -m src.code_generator"

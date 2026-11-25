@@ -1,4 +1,7 @@
 [tool.pytest.ini_options]
 testpaths = ["evals"]
+markers = [
+    "llm: tests that require a running local Ollama instance",
+]
 pythonpath = ["."]
 addopts = "-v -s"
