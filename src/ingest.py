@@ -76,3 +76,13 @@ def get_collection():
 def ingest_specs(specs_dir: str = "specs") -> int:
     """Совместимость для evals/test_retrieval.py"""
     return ingest_requirements(dirs=(specs_dir,))
+
+
+def get_collection():
+    """Совместимость для evals/test_retrieval.py"""
+    return chroma_client.get_or_create_collection(name=COLLECTION_NAME)
+
+
+def ingest_specs(specs_dir: str = "specs") -> int:
+    """Совместимость для evals/test_retrieval.py"""
+    return ingest_requirements(dirs=(specs_dir,))
