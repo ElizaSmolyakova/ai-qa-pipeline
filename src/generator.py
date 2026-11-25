@@ -3,6 +3,7 @@ from src.ingest import get_collection
 from src.schemas import TestSuite
 import time
 from src.telemetry.tracer import tracer
+from src.skills_loader import load_skill
 
 # Подключаемся к локальной Ollama — никуда в интернет данные не уходят
 client = OpenAI(
@@ -33,14 +34,7 @@ def generate_test_suite(query: str) -> TestSuite:
         messages=[
                         {
                 "role": "system",
-                "content": (
-                    "Ты Senior SDET (QA Automation). Напиши автотесты на pytest строго по переданному списку "
-                    "тест-сценариев (один тест-кейс = одна функция def test_...). "
-                    "Используй библиотеку requests. Базовый URL сервера: http://localhost:8000 "
-                    "(всегда пиши полный URL, например http://localhost:8000/api/v1/pay). "
-                    "Тело POST-запроса передавай в json={'amount': ..., 'currency': 'RUB'}. "
-                    "В поле python_code пиши ТОЛЬКО чистый код Python, без ```python."
-                ),
+                "content": load_skill("test_designer"),
             },
         {
                 "role": "user",

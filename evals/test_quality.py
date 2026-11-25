@@ -2,6 +2,8 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 from src.generator import MODEL_NAME, client, generate_test_suite
 import pytest
+from src.skills_loader import load_skill
+
 
 
 # Контракт для ответа "Судьи" (LLM-as-a-Judge)
@@ -51,10 +53,7 @@ def test_generated_cases_llm_as_a_judge():
         messages=[
             {
                 "role": "system",
-                "content": (
-                    "Ты строгий QA-ревьюер. Сравни сгенерированные тест-кейсы с исходными требованиями. "
-                    "Если в тестах есть статусы или правила, которых НЕТ в требованиях, ставь has_hallucinations=True."
-                ),
+                "content": load_skill("llm_judge"),
             },
             {
                 "role": "user",

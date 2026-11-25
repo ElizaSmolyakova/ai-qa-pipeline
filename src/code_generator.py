@@ -7,6 +7,7 @@ from openai import OpenAI
 from src.generator import generate_test_suite
 from src.schemas import GeneratedCode, TestSuite
 from src.telemetry.tracer import tracer
+from src.skills_loader import load_skill
 
 client = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
 
@@ -66,20 +67,7 @@ def generate_pytest_with_healing(
     file_path = out_path / "test_pay.py"
 
     messages = [
-        {
-            "role": "system",
-           "content": (
-                "Ты Python QA Automation инженер. Напиши тесты на pytest + requests.\n"
-                "ОБЯЗАТЕЛЬНЫЙ ПРИМЕР КАЖДОГО ТЕСТА:\n"
-                "import requests\n\n"
-                "def test_pay_example(base_url):\n"
-                "    response = requests.post(f'{base_url}/api/v1/pay', json={'amount': 100, 'currency': 'RUB'})\n"
-                "    assert response.status_code == 200\n\n"
-                "Правила: 1) НЕ создавай фикстуру base_url в файле (она уже есть в conftest.py). "
-                "2) НИКОГДА не пиши example.com или localhost:8000 — только f'{base_url}/...'. "
-                "3) Верни ТОЛЬКО чистый Python-код."
-            ),
-        },
+        {"role": "system", "content": load_skill("pytest_codegen")},
         {
             "role": "user",
             "content": f"Сгенерируй файл test_pay.py по этим сценариям:\n{suite.model_dump_json(indent=2)}",
